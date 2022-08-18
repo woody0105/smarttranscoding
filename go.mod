@@ -1,4 +1,4 @@
-module github.com/woody0105/segmentation
+module github.com/woody0105/smarttranscoding
 
 go 1.17
 
