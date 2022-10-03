@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"unsafe"
 
 	"github.com/gorilla/websocket"
@@ -52,7 +53,137 @@ func SetDecoderCtxParams(w int, h int) {
 	C.set_decoder_ctx_params(C.int(w), C.int(h))
 }
 
-func FeedPacket(pkt TimedPacket, nodes []string, conn *websocket.Conn) {
+var m sync.Mutex
+
+func FaceRecognition(filename string, conn *websocket.Conn, url string, timestamp uint64, m *sync.Mutex) {
+	f, _ := os.Open(filename)
+	defer os.Remove(filename)
+	retStr := ""
+	client := &http.Client{}
+	// Read entire JPG into byte slice.
+	reader := bufio.NewReader(f)
+	content, _ := ioutil.ReadAll(reader)
+
+	// Encode as base64.
+	encoded := base64.StdEncoding.EncodeToString(content)
+
+	// Print encoded data to console.
+	// ... The base64 image can be used as a data URI in a browser.
+	// fmt.Println("ENCODED: " + encoded)
+	metadata := fmt.Sprintf(`{"image": "data:image/jpg;base64, %s"}`, encoded)
+	// fmt.Println(encoded, "\n\n\n\n")
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer([]byte(metadata)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+		bodyString := string(bodyBytes)
+		retStr = bodyString
+	}
+
+	res := map[string]interface{}{"track": "face-recognition", "timestamp": int(timestamp), "metadata": retStr, "type": "metadata"}
+	jsonres, _ := json.Marshal(res)
+	log.Println("writing data, timestamp:", timestamp, "\n", string(jsonres))
+	m.Lock()
+	conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
+	m.Unlock()
+}
+
+func ImageCaptioning(filename string, conn *websocket.Conn, url string, timestamp uint64, m *sync.Mutex) {
+	f, _ := os.Open(filename)
+	defer os.Remove(filename)
+	retStr := ""
+	client := &http.Client{}
+
+	// Read entire JPG into byte slice.
+	reader := bufio.NewReader(f)
+	content, _ := ioutil.ReadAll(reader)
+
+	// Encode as base64.
+	encoded := base64.StdEncoding.EncodeToString(content)
+	metadata := fmt.Sprintf(`{"image": "data:image/jpg;base64, %s"}`, encoded)
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer([]byte(metadata)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+		bodyString := string(bodyBytes)
+		retStr = bodyString
+	}
+
+	res := map[string]interface{}{"track": "image-caption", "timestamp": int(timestamp), "metadata": retStr, "type": "metadata"}
+	jsonres, _ := json.Marshal(res)
+	log.Println("writing data, timestamp:", timestamp, "\n", string(jsonres))
+	m.Lock()
+	conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
+	m.Unlock()
+}
+
+func InstanceSegmentation(filename string, conn *websocket.Conn, url string, timestamp uint64, m *sync.Mutex) {
+	f, _ := os.Open(filename)
+	defer os.Remove(filename)
+	retStr := ""
+	client := &http.Client{}
+
+	// Read entire JPG into byte slice.
+	reader := bufio.NewReader(f)
+	content, _ := ioutil.ReadAll(reader)
+
+	// Encode as base64.
+	encoded := base64.StdEncoding.EncodeToString(content)
+
+	// Print encoded data to console.
+	// ... The base64 image can be used as a data URI in a browser.
+	// fmt.Println("ENCODED: " + encoded)
+	metadata := fmt.Sprintf(`{"image": "data:image/jpg;base64, %s"}`, encoded)
+	// fmt.Println(encoded, "\n\n\n\n")
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer([]byte(metadata)))
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+		bodyString := string(bodyBytes)
+		retStr = bodyString
+	} else {
+		log.Printf("url: %s\n status code %d", url, resp.StatusCode)
+	}
+
+	res := map[string]interface{}{"track": "instance-segmentation", "timestamp": int(timestamp), "metadata": retStr, "type": "metadata"}
+	jsonres, _ := json.Marshal(res)
+	log.Println("writing mjpg data, timestamp:", timestamp, " node:", url)
+	m.Lock()
+	conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
+	m.Unlock()
+}
+
+func FeedPacket(pkt TimedPacket, nodes []string, conn *websocket.Conn, reqFeatures []string) {
 	timestamp := pkt.Timestamp
 	pktdata := pkt.Packetdata
 	buffer := (*C.char)(unsafe.Pointer(C.CString(string(pktdata.Data))))
@@ -61,95 +192,21 @@ func FeedPacket(pkt TimedPacket, nodes []string, conn *websocket.Conn) {
 
 	path, _ := os.Getwd()
 	filename := filepath.Join(path, "frame"+strconv.Itoa(int(pkt.Timestamp))+".jpg")
-	defer os.Remove(filename)
-	retStr := ""
-	client := &http.Client{}
 
 	url := ""
-	for _, node := range nodes {
-		url = fmt.Sprintf("http://%s:6337/face-recognition", node)
-	}
+	nodelen := len(nodes)
 
-	trackid := "2"
-	if i%8 == 4 {
-		f, _ := os.Open(filename)
-
-		// Read entire JPG into byte slice.
-		reader := bufio.NewReader(f)
-		content, _ := ioutil.ReadAll(reader)
-
-		// Encode as base64.
-		encoded := base64.StdEncoding.EncodeToString(content)
-
-		// Print encoded data to console.
-		// ... The base64 image can be used as a data URI in a browser.
-		// fmt.Println("ENCODED: " + encoded)
-		metadata := fmt.Sprintf(`{"image": "data:image/jpg;base64, %s"}`, encoded)
-		// fmt.Println(encoded, "\n\n\n\n")
-		req, _ := http.NewRequest("POST", url, bytes.NewBuffer([]byte(metadata)))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			bodyBytes, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Fatal(err)
-			}
-			bodyString := string(bodyBytes)
-			retStr = bodyString
-		}
-
-		trackid = "3"
-
-		res := map[string]interface{}{"trackid": trackid, "timestamp": int(timestamp), "metadata": retStr, "type": "metadata"}
-		jsonres, _ := json.Marshal(res)
-		log.Println("writing data, timestamp:", timestamp, "\n", string(jsonres))
-		conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
-
-	} else if i%40 == 0 {
-		url = "http://34.121.62.161:6337/image-captioning"
-		f, _ := os.Open(filename)
-
-		// Read entire JPG into byte slice.
-		reader := bufio.NewReader(f)
-		content, _ := ioutil.ReadAll(reader)
-
-		// Encode as base64.
-		encoded := base64.StdEncoding.EncodeToString(content)
-
-		// Print encoded data to console.
-		// ... The base64 image can be used as a data URI in a browser.
-		// fmt.Println("ENCODED: " + encoded)
-		metadata := fmt.Sprintf(`{"image": "data:image/jpg;base64, %s"}`, encoded)
-		// fmt.Println(encoded, "\n\n\n\n")
-		req, _ := http.NewRequest("POST", url, bytes.NewBuffer([]byte(metadata)))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			bodyBytes, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Fatal(err)
-			}
-			bodyString := string(bodyBytes)
-			retStr = bodyString
-		}
-
-		trackid = "2"
-
-		res := map[string]interface{}{"trackid": trackid, "timestamp": int(timestamp), "metadata": retStr, "type": "metadata"}
-		jsonres, _ := json.Marshal(res)
-		log.Println("writing data, timestamp:", timestamp, "\n", string(jsonres))
-		conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
-
+	if i%5 == 0 {
+		url = fmt.Sprintf("http://%s:5000/face-recognition", nodes[i%nodelen])
+		go FaceRecognition(filename, conn, url, timestamp, &m)
+	} else if i%30 == 1 {
+		url = fmt.Sprintf("http://%s:5000/image-captioning", nodes[i%nodelen])
+		go ImageCaptioning(filename, conn, url, timestamp, &m)
+	} else if i%10 == 2 {
+		url = fmt.Sprintf("http://%s:5000/instance-segmentation/detect-objects", nodes[i%nodelen])
+		go InstanceSegmentation(filename, conn, url, timestamp, &m)
+	} else {
+		defer os.Remove(filename)
 	}
 	i = (i + 1) % 30
 }
@@ -157,9 +214,7 @@ func FeedPacket(pkt TimedPacket, nodes []string, conn *websocket.Conn) {
 func RegisterSamples(registerData *bytes.Buffer) (*http.Response, error) {
 	client := &http.Client{}
 
-	// fmt.Println(registerData)
-	url := "http://127.0.0.1:6337/update-samples"
-	// resp, err := client.Post(url, "application/json", registerData)
+	url := "http://127.0.0.1:5000/face-recognition/update-samples"
 
 	req, _ := http.NewRequest("POST", url, registerData)
 	req.Header.Set("Content-Type", "application/json")
