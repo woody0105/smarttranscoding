@@ -21,6 +21,8 @@ var addr = flag.String("addr", "localhost:8080", "http service address")
 
 var nodes = []string{"127.0.0.1", "35.194.58.82", "34.135.170.77"}
 
+// var nodes = []string{"127.0.0.1"}
+
 type Client struct {
 	ID   string
 	Conn *websocket.Conn
@@ -52,13 +54,17 @@ func handleconnections1(w http.ResponseWriter, r *http.Request) {
 
 	facebuf1, _ := ioutil.ReadFile("example/faces/face1")
 	facebuf2, _ := ioutil.ReadFile("example/faces/face2")
+	facebuf3, _ := ioutil.ReadFile("example/faces/philipp")
+	facebuf4, _ := ioutil.ReadFile("example/faces/eric")
 
 	metadata := fmt.Sprintf(`
 	[
 		{"id": "1", "name": "Nick", "image": "%s", "metadata": "https://livepeer.org/dev1", "action": "embedlink"}, 
-		{"id": "2", "name": "James", "image": "%s", "metadata": "https://livepeer.org/dev2", "action": "embedlink"}
+		{"id": "2", "name": "James", "image": "%s", "metadata": "https://livepeer.org/dev2", "action": "embedlink"},
+		{"id": "3", "name": "Philipp", "image": "%s", "metadata": "https://livepeer.org/Philipp", "action": "embedlink"},
+		{"id": "4", "name": "Eric", "image": "%s", "metadata": "https://livepeer.org/Eric", "action": "embedlink"}
 	]
-	`, string(facebuf1), string(facebuf2))
+	`, string(facebuf1), string(facebuf2), string(facebuf3), string(facebuf4))
 
 	resp, err := ffmpeg.RegisterSamples(bytes.NewBuffer([]byte(metadata)))
 
@@ -92,20 +98,12 @@ func handlemsg1(w http.ResponseWriter, r *http.Request, conn *websocket.Conn, co
 				log.Printf("error: %v", err)
 			}
 			log.Printf("read:%v", err)
-			// conn.Close()
+			conn.Close()
+			isFirstFrame = true
 			break
 		}
 		timestamp := binary.BigEndian.Uint64(message[:8])
 		packetdata := message[8:]
-		// nalHeader := int(packetdata[0])
-
-		// nalUnitType := nalHeader % 32
-		// nalUnitType := packetdata[4] & 0x1F
-		// fmt.Println("nal unittype:", nalUnitType, "timestamp:", timestamp)
-		// if nalUnitType == 0x05 {
-		// 	fmt.Println("sps packet, appending initData", initData)
-		// 	packetdata = append(initData, packetdata...)
-		// }
 
 		if isFirstFrame {
 			fmt.Println("sps packet, appending initData", initData)
@@ -114,25 +112,7 @@ func handlemsg1(w http.ResponseWriter, r *http.Request, conn *websocket.Conn, co
 		}
 
 		timedpacket := ffmpeg.TimedPacket{Timestamp: timestamp, Packetdata: ffmpeg.APacket{Data: packetdata, Length: len(packetdata)}}
-		ffmpeg.FeedPacket(timedpacket, nodes, conn)
-		// if inferRes != "" && !strings.Contains(inferRes, "[]") {
-		// 	trackid := "2"
-		// 	if !strings.Contains(inferRes, "\"caption\"") {
-		// 		trackid = "3"
-		// 	}
-		// 	res := map[string]interface{}{"trackid": trackid, "timestamp": int(timestamp), "metadata": inferRes, "type": "metadata"}
-		// 	jsonres, _ := json.Marshal(res)
-		// 	log.Println("writing data, timestamp:", timestamp, "\n", string(jsonres))
-		// 	conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
-		// }
-		// else {
-		// 	inferRes = "[]"
-		// 	res := map[string]interface{}{"timestamp": int(timestamp), "metadata": inferRes, "type": "metadata"}
-		// 	jsonres, _ := json.Marshal(res)
-		// 	log.Println("writing data, timestamp:", timestamp, "\n", string(jsonres))
-		// 	conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
-		// }
-
+		ffmpeg.FeedPacket(timedpacket, nodes, conn, nodes)
 	}
 }
 
